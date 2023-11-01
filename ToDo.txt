@@ -1,0 +1,4 @@
+- test controller with 10 and 50 ms intervals in the flight loop (all other settings as of now)
+- add simple widget to set the desired speed to hold
+- if AP is active, get set speed from AP either IAS or Mach
+- further tune PID components of the controller to reach decent stabillity especially with winds
