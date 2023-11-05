@@ -1,10 +1,13 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 
-#include <XPLM/XPLMPlugin.h>
-#include <XPLM/XPLMProcessing.h>
-#include <XPLM/XPLMMenus.h>
-#include <XPLM/XPLMDataAccess.h>
-#include <XPLM/XPLMPlanes.h>
+#include <XPLMPlugin.h>
+#include <XPLMProcessing.h>
+#include <XPLMMenus.h>
+#include <XPLMDataAccess.h>
+#include <XPLMPlanes.h>
+#include <XPWidgets.h>
+#include <XPStandardWidgets.h>
+
 #include <string>
 #include <vector>
 #include <fstream>
@@ -13,6 +16,13 @@
 #include "../PID.h"
 
 void AutoThrottleMenuHandler(void* menuRef, void* itemRef);
+float getAutoSpeed(void* ref);
+void setAutoSpeed(void* ref, float val);
+int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref);
+int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref);
+
+int controllerWidgetCb(XPWidgetMessage msg, XPWidgetID widget, intptr_t param1, intptr_t param2);
+void CreateControllerWidget();
 
 const std::string PluginName = "AutoThrottle";
 const std::string Signature = "com.v8judd.AutoThrottle";
@@ -30,14 +40,20 @@ struct globals_t
 	XPLMDataRef timeRef = nullptr;
 	XPLMDataRef throttleRef = nullptr;
 	XPLMDataRef iasRef = nullptr;
-	XPLMDataRef apSpeed = nullptr; // Autopilot set speed
+	XPLMDataRef apSpeedRef = nullptr; // Autopilot set speed
+	XPLMDataRef holdSpeedRef = nullptr;
+
+	XPWidgetID controllerWidget = nullptr;
+	XPWidgetID lblHoldSpeed = nullptr;
+
+	XPLMCommandRef holdSpeedUpCmd = nullptr;
+	XPLMCommandRef holdSpeedDownCmd = nullptr;
 
 	bool autoThrEnabled = false;
 	XPLMFlightLoopID fltLoopId = nullptr;
-	float setSpeed = 0; // setpoint AP speed
 	std::ofstream log;
 	int logCnt = 0;
-	float setpoint = 0;
+	float holdSpeed = 200;
 	float pidT = 0;
 	float limMin = 0;
 	float limMax = 0;
@@ -76,7 +92,7 @@ void loadControllerConfig(PIDController& ctrl)
 	ctrl.limMax = cfg["limMax"];
 	ctrl.limMinInt = cfg["limIntMin"];
 	ctrl.limMaxInt = cfg["limIntMax"];
-	globals.setpoint = cfg["setpoint"];
+	globals.holdSpeed = cfg["setpoint"];
 	globals.pidT = cfg["pid_time"];
 	globals.limMax = cfg["limMax"];
 	globals.limMin = cfg["limMin"];
@@ -109,6 +125,9 @@ XPLMCreateFlightLoop_t controllerLoop{
 		static float t = 0;
 		static float lastLogTime = 0;
 
+		std::string lv = std::to_string(globals.holdSpeed);
+		XPSetWidgetDescriptor(globals.lblHoldSpeed, lv.c_str());
+
 		if (!globals.autoThrEnabled)
 		{
 			lastLogTime = 0;
@@ -120,7 +139,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 		{
 			if (globals.log.is_open())
 			{
-				globals.log << "setpoint: " << globals.setSpeed << std::endl;
+				globals.log << "setpoint: " << globals.holdSpeed << std::endl;
 				globals.log << "t;error;speed;out;setpoint" << std::endl;
 			}
 
@@ -133,6 +152,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 
 		globals.pid->setTime(deltaT);
 		auto ias = XPLMGetDataf(globals.iasRef);
+
 		auto prevErr = globals.pid->data().prevError;
 		if (prevErr > 15)
 			globals.pid->setMaxLimit(0.95f);
@@ -147,7 +167,8 @@ XPLMCreateFlightLoop_t controllerLoop{
 			globals.pid->setMinLimit(0.375);
 		else
 			globals.pid->setMinLimit(globals.limMin);
-		auto err = globals.pid->update(globals.setSpeed, ias);
+
+		auto err = globals.pid->update(globals.holdSpeed, ias);
 
 		XPLMSetDataf(globals.throttleRef, globals.pid->data().out);
 
@@ -160,7 +181,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 			lastLogTime = t;
 			if (globals.log.is_open())
 			{
-				globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.setSpeed << std::endl;
+				globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << std::endl;
 			}
 		}
 		return globals.pidT;
@@ -174,17 +195,26 @@ PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
 	strcpy_s(desc, 256, Description.c_str());
 
 	XPLMDebugString("[TK] AutoThrottle plugin loaded\n");
+	XPLMEnableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS", 1);
 
 	autoThrottleMenuIdx = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "AutoThrottle", nullptr, 0);
 	autoThrottleMenuID = XPLMCreateMenu("AutoThrottle", XPLMFindPluginsMenu(), autoThrottleMenuIdx, AutoThrottleMenuHandler, nullptr);
 	XPLMAppendMenuItem(autoThrottleMenuID, "Enable", (void*)"enable", 0);
 	XPLMAppendMenuItem(autoThrottleMenuID, "Disable", (void*)"disable", 0);
 	XPLMAppendMenuItem(autoThrottleMenuID, "Reload Config", (void*)"reload", 0);
+	XPLMAppendMenuSeparator(autoThrottleMenuID);
+	XPLMAppendMenuItem(autoThrottleMenuID, "Show Config", (void*)"config", 0);
 
 	globals.timeRef = XPLMFindDataRef("sim/time/total_running_time_sec");
 	globals.throttleRef = XPLMFindDataRef("sim/cockpit2/engine/actuators/throttle_ratio_all");
 	globals.iasRef = XPLMFindDataRef("sim/cockpit2/gauges/indicators/airspeed_kts_pilot");
-	globals.apSpeed = XPLMFindDataRef("sim/cockpit2/autopilot/airspeed_dial_kts");
+	globals.apSpeedRef = XPLMFindDataRef("sim/cockpit2/autopilot/airspeed_dial_kts");
+	globals.holdSpeedRef = XPLMRegisterDataAccessor("v8judd/auto_throttle/hold_speed", xplmType_Float, true, nullptr, nullptr, getAutoSpeed, setAutoSpeed, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+	globals.holdSpeedUpCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_up", "Hold speed up");
+	globals.holdSpeedDownCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_down", "Hold speed down");
+
+	XPLMRegisterCommandHandler(globals.holdSpeedUpCmd, holdSpeedUpHandler, 1, nullptr);
+	XPLMRegisterCommandHandler(globals.holdSpeedDownCmd, holdSpeedDownHandler, 1, nullptr);
 
 	char filePath[512] = { 0 };
 	XPLMGetPluginInfo(XPLMGetMyID(), nullptr, filePath, nullptr, nullptr);
@@ -206,8 +236,13 @@ PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
 PLUGIN_API void XPluginStop()
 {
 	XPLMDebugString("[TK] XPluginStop() called\n");
+	if (globals.controllerWidget != nullptr)
+	{
+		XPDestroyWidget(globals.controllerWidget, 1);
+		globals.controllerWidget = nullptr;
+	}
+	XPLMDestroyMenu(autoThrottleMenuID);
 
-	//XPLMDestroyMenu(autoThrottleMenuID);
 	delete globals.pid;
 }
 
@@ -221,6 +256,7 @@ PLUGIN_API int XPluginEnable()
 PLUGIN_API void XPluginDisable()
 {
 	XPLMDebugString("[TK] XPluginDisable() called\n");
+	XPLMDestroyFlightLoop(globals.fltLoopId);
 }
 
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
@@ -256,11 +292,6 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 	std::string str{ reinterpret_cast<char*>(itemRef) };
 	if ("enable" == str)
 	{
-		// for now the setpoint is the current
-		// speed when the controller is enabled
-		//globals.setSpeed = XPLMGetDataf(globals.iasRef);
-		globals.setSpeed = globals.setpoint;
-
 		// enable controller
 		globals.autoThrEnabled = true;
 
@@ -276,5 +307,81 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 		PIDController ctrl{ 0 };
 		loadControllerConfig(ctrl);
 		globals.pid->updateConfig(ctrl);
+	} else if ("config" == str)
+	{
+		if (globals.controllerWidget == nullptr)
+			CreateControllerWidget();
+		else
+			XPShowWidget(globals.controllerWidget);
 	}
+}
+
+float getAutoSpeed(void* ref)
+{
+	return globals.holdSpeed;
+}
+
+void setAutoSpeed(void* ref, float val)
+{
+	if (nullptr == ref)
+		return;
+
+	globals.holdSpeed = val;
+}
+
+int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
+{
+	if (phase == 0)
+	{
+		if (globals.holdSpeed <= 320)
+			globals.holdSpeed++;
+	}
+	return 0;
+}
+
+int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
+{
+	if (phase == 0)
+	{
+		if (globals.holdSpeed >= 120)
+			globals.holdSpeed--;
+	}
+	return 0;
+}
+
+
+void CreateControllerWidget()
+{
+	int l, t, r, b;
+	XPLMGetScreenBoundsGlobal(&l, &t, &r, &b); // 0, 1080, 1920, 0
+	int x = l + 50, y = t - 250, w = 200, h = 100;
+	int x2 = w + x;
+	int y2 = y - h;
+	globals.controllerWidget = XPCreateWidget(x, y, x2, y2, 1, "AutoThrottle Controller", 1, nullptr, xpWidgetClass_MainWindow);
+	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowType, xpMainWindowStyle_MainWindow);
+	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowHasCloseBoxes, 1);
+	auto lblText = XPCreateWidget(x + 10, y - 20, x + 50, y - 40, 1, "Speed: ", 0, globals.controllerWidget, xpWidgetClass_Caption);
+	std::string str = std::to_string(200.0f);
+
+	globals.lblHoldSpeed = XPCreateWidget(x + 55, y - 20, x2 - 25, y - 40, 1, str.c_str(), 0, globals.controllerWidget, xpWidgetClass_Caption);
+
+	//auto wnd = XPGetWidgetUnderlyingWindow(globals.controllerWidget);
+	//XPLMSetWindowPositioningMode(wnd, xplm_WindowPositionFree, -1);
+	//XPLMSetWindowResizingLimits(wnd, 200, 200, 300, 300);
+	//XPLMSetWindowTitle(wnd, "Sample Window");
+
+	XPAddWidgetCallback(globals.controllerWidget, controllerWidgetCb);
+	XPShowWidget(globals.controllerWidget);
+	XPBringRootWidgetToFront(globals.controllerWidget);
+}
+
+int controllerWidgetCb(XPWidgetMessage msg, XPWidgetID widget, intptr_t param1, intptr_t param2)
+{
+	if (msg == xpMessage_CloseButtonPushed)
+	{
+		XPHideWidget(globals.controllerWidget);
+		return 1;
+	}
+
+	return 0;
 }

@@ -130,7 +130,7 @@
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\iceri\source\repos\AutoThrottle\XPSDK\CHeaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\iceri\source\repos\AutoThrottle\XPSDK\CHeaders\Widgets;C:\Users\iceri\source\repos\AutoThrottle\XPSDK\CHeaders\XPLM;C:\Users\iceri\source\repos\AutoThrottle\XPSDK\CHeaders\Wrappers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
