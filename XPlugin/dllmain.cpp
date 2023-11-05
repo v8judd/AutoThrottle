@@ -37,7 +37,10 @@ struct globals_t
 	float setSpeed = 0; // setpoint AP speed
 	std::ofstream log;
 	int logCnt = 0;
-
+	float setpoint = 0;
+	float pidT = 0;
+	float limMin = 0;
+	float limMax = 0;
 }globals;
 
 void loadControllerConfig(PIDController& ctrl)
@@ -73,6 +76,10 @@ void loadControllerConfig(PIDController& ctrl)
 	ctrl.limMax = cfg["limMax"];
 	ctrl.limMinInt = cfg["limIntMin"];
 	ctrl.limMaxInt = cfg["limIntMax"];
+	globals.setpoint = cfg["setpoint"];
+	globals.pidT = cfg["pid_time"];
+	globals.limMax = cfg["limMax"];
+	globals.limMin = cfg["limMin"];
 
 	if (globals.log.is_open())
 	{
@@ -80,7 +87,7 @@ void loadControllerConfig(PIDController& ctrl)
 		globals.log.close();
 	}
 
-	globals.log.open(globals.pluginPath + "\\log" + std::to_string(globals.logCnt) + ".log");
+	globals.log.open(globals.pluginPath + "\\log" + std::to_string(globals.logCnt) + ".csv");
 	++globals.logCnt;
 
 	globals.log << "Kp: " << ctrl.Kp << std::endl;
@@ -90,7 +97,7 @@ void loadControllerConfig(PIDController& ctrl)
 	globals.log << "limMin: " << ctrl.limMin << std::endl;
 	globals.log << "limMax: " << ctrl.limMax << std::endl;
 	globals.log << "intLimMin: " << ctrl.limMinInt << std::endl;
-	globals.log << "intLimMax: " << ctrl.limMaxInt << std::endl;	
+	globals.log << "intLimMax: " << ctrl.limMaxInt << std::endl;
 }
 
 XPLMCreateFlightLoop_t controllerLoop{
@@ -100,11 +107,13 @@ XPLMCreateFlightLoop_t controllerLoop{
 
 		static float lastTime = 0;
 		static float t = 0;
+		static float lastLogTime = 0;
 
 		if (!globals.autoThrEnabled)
 		{
+			lastLogTime = 0;
 			lastTime = 0;
-			return 0.02f;
+			return globals.pidT;
 		}
 
 		if (0 == lastTime)
@@ -112,7 +121,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 			if (globals.log.is_open())
 			{
 				globals.log << "setpoint: " << globals.setSpeed << std::endl;
-				globals.log << "t;error;out" << std::endl;
+				globals.log << "t;error;speed;out;setpoint" << std::endl;
 			}
 
 			lastTime = XPLMGetDataf(globals.timeRef);
@@ -120,22 +129,41 @@ XPLMCreateFlightLoop_t controllerLoop{
 		}
 		auto deltaT = XPLMGetDataf(globals.timeRef) - lastTime;
 		if (deltaT <= 0.000001f)
-			return 0.02f;
+			return globals.pidT;
 
 		globals.pid->setTime(deltaT);
 		auto ias = XPLMGetDataf(globals.iasRef);
+		auto prevErr = globals.pid->data().prevError;
+		if (prevErr > 15)
+			globals.pid->setMaxLimit(0.95f);
+		else if (prevErr < 5)
+			globals.pid->setMaxLimit(0.625);
+		else
+			globals.pid->setMaxLimit(globals.limMax);
+
+		if (prevErr < 15)
+			globals.pid->setMinLimit(0);
+		else if (prevErr > -5)
+			globals.pid->setMinLimit(0.375);
+		else
+			globals.pid->setMinLimit(globals.limMin);
 		auto err = globals.pid->update(globals.setSpeed, ias);
+
 		XPLMSetDataf(globals.throttleRef, globals.pid->data().out);
 
 		lastTime = XPLMGetDataf(globals.timeRef);
 		t += deltaT;
-
-		if (globals.log.is_open())
+		if (0 == lastLogTime)
+			lastLogTime = t;
+		if (t - lastLogTime > 0.1f)
 		{
-			globals.log << t << ";" << err << ";" << globals.pid->data().out << std::endl;
+			lastLogTime = t;
+			if (globals.log.is_open())
+			{
+				globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.setSpeed << std::endl;
+			}
 		}
-
-		return 0.02f;
+		return globals.pidT;
 	}
 };
 
@@ -230,7 +258,8 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 	{
 		// for now the setpoint is the current
 		// speed when the controller is enabled
-		globals.setSpeed = XPLMGetDataf(globals.iasRef);
+		//globals.setSpeed = XPLMGetDataf(globals.iasRef);
+		globals.setSpeed = globals.setpoint;
 
 		// enable controller
 		globals.autoThrEnabled = true;
@@ -241,7 +270,7 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 		globals.autoThrEnabled = false;
 
 	} else if ("reload" == str)
-	{		
+	{
 		globals.autoThrEnabled = false;
 		// reload controller config from file
 		PIDController ctrl{ 0 };

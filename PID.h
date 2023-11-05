@@ -1,7 +1,8 @@
 #ifndef PID_CONTROLLER_H
 #define PID_CONTROLLER_H
 
-typedef struct {
+typedef struct
+{
 
 	/* Controller gains */
 	float Kp;
@@ -14,7 +15,7 @@ typedef struct {
 	/* Output limits */
 	float limMin;
 	float limMax;
-	
+
 	/* Integrator limits */
 	float limMinInt;
 	float limMaxInt;
@@ -45,6 +46,9 @@ public:
 	void updateConfig(const PIDController& ctrl);
 	void setTime(float t) { pid.T = t; }
 	PIDController& data() { return pid; }
+	void setLimits(float lower, float upper) { pid.limMax = upper, pid.limMin = lower; }
+	void setMinLimit(float lower) { pid.limMin = lower; }
+	void setMaxLimit(float upper) { pid.limMax = upper; }
 };
 
 #endif
