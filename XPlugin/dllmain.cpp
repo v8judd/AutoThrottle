@@ -7,6 +7,7 @@
 #include <XPLMPlanes.h>
 #include <XPWidgets.h>
 #include <XPStandardWidgets.h>
+#include <XPLMGraphics.h>
 
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@ float getAutoSpeed(void* ref);
 void setAutoSpeed(void* ref, float val);
 int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref);
 int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref);
+int autoThrottleToggleHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref);
 
 int controllerWidgetCb(XPWidgetMessage msg, XPWidgetID widget, intptr_t param1, intptr_t param2);
 void CreateControllerWidget();
@@ -45,9 +47,11 @@ struct globals_t
 
 	XPWidgetID controllerWidget = nullptr;
 	XPWidgetID lblHoldSpeed = nullptr;
+	XPLMWindowID controllerWnd = nullptr;
 
 	XPLMCommandRef holdSpeedUpCmd = nullptr;
 	XPLMCommandRef holdSpeedDownCmd = nullptr;
+	XPLMCommandRef autoThrottleToggleCmd = nullptr;
 
 	bool autoThrEnabled = false;
 	XPLMFlightLoopID fltLoopId = nullptr;
@@ -96,24 +100,6 @@ void loadControllerConfig(PIDController& ctrl)
 	globals.pidT = cfg["pid_time"];
 	globals.limMax = cfg["limMax"];
 	globals.limMin = cfg["limMin"];
-
-	if (globals.log.is_open())
-	{
-		globals.log.flush();
-		globals.log.close();
-	}
-
-	globals.log.open(globals.pluginPath + "\\log" + std::to_string(globals.logCnt) + ".csv");
-	++globals.logCnt;
-
-	globals.log << "Kp: " << ctrl.Kp << std::endl;
-	globals.log << "Ki: " << ctrl.Ki << std::endl;
-	globals.log << "Kd: " << ctrl.Kd << std::endl;
-	globals.log << "tau: " << ctrl.tau << std::endl;
-	globals.log << "limMin: " << ctrl.limMin << std::endl;
-	globals.log << "limMax: " << ctrl.limMax << std::endl;
-	globals.log << "intLimMin: " << ctrl.limMinInt << std::endl;
-	globals.log << "intLimMax: " << ctrl.limMaxInt << std::endl;
 }
 
 XPLMCreateFlightLoop_t controllerLoop{
@@ -154,38 +140,38 @@ XPLMCreateFlightLoop_t controllerLoop{
 		auto ias = XPLMGetDataf(globals.iasRef);
 
 		auto prevErr = globals.pid->data().prevError;
-		if (prevErr > 15)
-			globals.pid->setMaxLimit(0.95f);
-		else if (prevErr < 5)
-			globals.pid->setMaxLimit(0.625);
-		else
+		//if (prevErr > 15)
+		//	globals.pid->setMaxLimit(0.95f);
+		//else if (prevErr < 5)
+		//	globals.pid->setMaxLimit(0.625);
+		//else
 			globals.pid->setMaxLimit(globals.limMax);
 
-		if (prevErr < 15)
-			globals.pid->setMinLimit(0);
-		else if (prevErr > -5)
-			globals.pid->setMinLimit(0.375);
-		else
-			globals.pid->setMinLimit(globals.limMin);
+			//if (prevErr < 15)
+			//	globals.pid->setMinLimit(0);
+			//else if (prevErr > -5)
+			//	globals.pid->setMinLimit(0.375);
+			//else
+				globals.pid->setMinLimit(globals.limMin);
 
-		auto err = globals.pid->update(globals.holdSpeed, ias);
+			auto err = globals.pid->update(globals.holdSpeed, ias);
 
-		XPLMSetDataf(globals.throttleRef, globals.pid->data().out);
+			XPLMSetDataf(globals.throttleRef, globals.pid->data().out);
 
-		lastTime = XPLMGetDataf(globals.timeRef);
-		t += deltaT;
-		if (0 == lastLogTime)
-			lastLogTime = t;
-		if (t - lastLogTime > 0.1f)
-		{
-			lastLogTime = t;
-			if (globals.log.is_open())
+			lastTime = XPLMGetDataf(globals.timeRef);
+			t += deltaT;
+			if (0 == lastLogTime)
+				lastLogTime = t;
+			if (t - lastLogTime > 0.1f)
 			{
-				globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << std::endl;
+				lastLogTime = t;
+				if (globals.log.is_open())
+				{
+					globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << std::endl;
+				}
 			}
+			return globals.pidT;
 		}
-		return globals.pidT;
-	}
 };
 
 PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
@@ -212,9 +198,11 @@ PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
 	globals.holdSpeedRef = XPLMRegisterDataAccessor("v8judd/auto_throttle/hold_speed", xplmType_Float, true, nullptr, nullptr, getAutoSpeed, setAutoSpeed, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 	globals.holdSpeedUpCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_up", "Hold speed up");
 	globals.holdSpeedDownCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_down", "Hold speed down");
+	globals.autoThrottleToggleCmd = XPLMCreateCommand("v8judd/auto_throttle/ATtoggle", "AutoThrottle toggle");
 
 	XPLMRegisterCommandHandler(globals.holdSpeedUpCmd, holdSpeedUpHandler, 1, nullptr);
 	XPLMRegisterCommandHandler(globals.holdSpeedDownCmd, holdSpeedDownHandler, 1, nullptr);
+	XPLMRegisterCommandHandler(globals.autoThrottleToggleCmd, autoThrottleToggleHandler, 1, nullptr);
 
 	char filePath[512] = { 0 };
 	XPLMGetPluginInfo(XPLMGetMyID(), nullptr, filePath, nullptr, nullptr);
@@ -284,6 +272,45 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 	}
 }
 
+void enableAutoThrottle()
+{
+	// NEW: start new log when auto throttle enabled
+	if (globals.log.is_open())
+	{
+		globals.log.flush();
+		globals.log.close();
+	}
+
+	globals.log.open(globals.pluginPath + "\\log" + std::to_string(globals.logCnt) + ".csv");
+	++globals.logCnt;
+
+	auto& ctrl = globals.pid->data();
+
+	globals.log << "Kp: " << ctrl.Kp << std::endl;
+	globals.log << "Ki: " << ctrl.Ki << std::endl;
+	globals.log << "Kd: " << ctrl.Kd << std::endl;
+	globals.log << "tau: " << ctrl.tau << std::endl;
+	globals.log << "limMin: " << ctrl.limMin << std::endl;
+	globals.log << "limMax: " << ctrl.limMax << std::endl;
+	globals.log << "intLimMin: " << ctrl.limMinInt << std::endl;
+	globals.log << "intLimMax: " << ctrl.limMaxInt << std::endl;
+	globals.log << "holdSpeed: " << globals.holdSpeed << std::endl;
+	globals.log << "T: " << globals.pidT << std::endl;
+
+	globals.autoThrEnabled = true;
+}
+
+void disableAutoThrottle()
+{
+	if (globals.log.is_open())
+	{
+		globals.log.flush();
+		globals.log.close();
+	}
+
+	globals.autoThrEnabled = false;
+}
+
 void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 {
 	if (nullptr == itemRef)
@@ -293,12 +320,14 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 	if ("enable" == str)
 	{
 		// enable controller
-		globals.autoThrEnabled = true;
+		//globals.autoThrEnabled = true;
+		enableAutoThrottle();
 
 	} else if ("disable" == str)
 	{
 		// disable controller
-		globals.autoThrEnabled = false;
+		//globals.autoThrEnabled = false;
+		disableAutoThrottle();
 
 	} else if ("reload" == str)
 	{
@@ -309,10 +338,19 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 		globals.pid->updateConfig(ctrl);
 	} else if ("config" == str)
 	{
-		if (globals.controllerWidget == nullptr)
+		if (globals.controllerWnd == nullptr)
+		{
 			CreateControllerWidget();
-		else
-			XPShowWidget(globals.controllerWidget);
+			if (!XPLMGetWindowIsVisible(globals.controllerWnd))
+				XPLMSetWindowIsVisible(globals.controllerWnd, 1);
+		} else
+		{
+			//XPShowWidget(globals.controllerWidget);
+			if (!XPLMGetWindowIsVisible(globals.controllerWnd))
+				XPLMSetWindowIsVisible(globals.controllerWnd, 1);
+			else
+				XPLMSetWindowIsVisible(globals.controllerWnd, 0);
+		}
 	}
 }
 
@@ -331,7 +369,15 @@ void setAutoSpeed(void* ref, float val)
 
 int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 {
-	if (phase == 0)
+	static float startTime = 0;
+
+	if (phase == xplm_CommandBegin)
+	{
+		if (globals.holdSpeed <= 320)
+			globals.holdSpeed++;
+
+		startTime = XPLMGetElapsedTime();
+	} else if (phase == xplm_CommandContinue && XPLMGetElapsedTime() - startTime > 0.5)
 	{
 		if (globals.holdSpeed <= 320)
 			globals.holdSpeed++;
@@ -341,7 +387,15 @@ int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 
 int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 {
-	if (phase == 0)
+	static float startTime = 0;
+
+	if (phase == xplm_CommandBegin)
+	{
+		if (globals.holdSpeed >= 120)
+			globals.holdSpeed--;
+
+		startTime = XPLMGetElapsedTime();
+	} else if (phase == xplm_CommandContinue && XPLMGetElapsedTime() - startTime > 0.5)
 	{
 		if (globals.holdSpeed >= 120)
 			globals.holdSpeed--;
@@ -349,32 +403,99 @@ int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 	return 0;
 }
 
+int autoThrottleToggleHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
+{
+	if (phase == 0)
+	{
+		if (globals.autoThrEnabled)
+			disableAutoThrottle();
+		else
+			enableAutoThrottle();
+	}
+	return 0;
+}
+
+//void CreateControllerWidget()
+//{
+//	int l, t, r, b;
+//	XPLMGetScreenBoundsGlobal(&l, &t, &r, &b); // 0, 1080, 1920, 0
+//	int x = l + 50, y = t - 250, w = 200, h = 100;
+//	int x2 = w + x;
+//	int y2 = y - h;
+//	globals.controllerWidget = XPCreateWidget(x, y, x2, y2, 1, "AutoThrottle Controller", 1, nullptr, xpWidgetClass_MainWindow);
+//	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowType, xpMainWindowStyle_MainWindow);
+//	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowHasCloseBoxes, 1);
+//	auto lblText = XPCreateWidget(x + 10, y - 20, x + 50, y - 40, 1, "Speed: ", 0, globals.controllerWidget, xpWidgetClass_Caption);
+//	std::string str = std::to_string(200.0f);
+//
+//	globals.lblHoldSpeed = XPCreateWidget(x + 55, y - 20, x2 - 25, y - 40, 1, str.c_str(), 0, globals.controllerWidget, xpWidgetClass_Caption);
+//
+//	//auto wnd = XPGetWidgetUnderlyingWindow(globals.controllerWidget);
+//	//XPLMSetWindowPositioningMode(wnd, xplm_WindowPositionFree, -1);
+//	//XPLMSetWindowResizingLimits(wnd, 200, 200, 300, 300);
+//	//XPLMSetWindowTitle(wnd, "Sample Window");
+//
+//	XPAddWidgetCallback(globals.controllerWidget, controllerWidgetCb);
+//	XPShowWidget(globals.controllerWidget);
+//	XPBringRootWidgetToFront(globals.controllerWidget);
+//}
+
+void wndDrawFn(XPLMWindowID wndId, void* ref)
+{
+	XPLMSetGraphicsState(0, 0, 0, 0, 1, 1, 0);
+
+	int l = 0, t = 0, r = 0, b = 0;
+
+	XPLMGetWindowGeometry(wndId, &l, &t, &r, &b);
+	int h = t - b;
+	XPLMDrawTranslucentDarkBox(l, t, r, b);
+	float color[] = { 1.0,1.0,1.0 };
+	const char lblText[] = "Set Speed:";
+	int textHeight = 0;
+	XPLMGetFontDimensions(xplmFont_Proportional, nullptr, &textHeight, nullptr);
+
+	std::string s = std::to_string(static_cast<int>(globals.holdSpeed));
+	int lblWidth = XPLMMeasureString(xplmFont_Proportional, lblText, strlen(lblText));
+	int valPos = l + 5 + lblWidth + 5;
+	XPLMDrawString(color, l + 5, b + ((h / 2) - (textHeight / 2)), const_cast<char*>(lblText), nullptr, xplmFont_Proportional);
+	XPLMDrawString(color, valPos, b + ((h / 2) - (textHeight / 2)), const_cast<char*>(s.c_str()), nullptr, xplmFont_Proportional);
+	int statusPos = XPLMMeasureString(xplmFont_Proportional, s.c_str(), s.length()) + 5 + valPos;
+	XPLMDrawString(color, statusPos, b + ((h / 2) - (textHeight / 2)), (char*)"On", nullptr, xplmFont_Proportional);
+
+	if (globals.autoThrEnabled)
+	{
+		float colorOn[] = { 1.0, 0, 0 };
+		XPLMDrawString(colorOn, statusPos, b + ((h / 2) - (textHeight / 2)), (char*)"On", nullptr, xplmFont_Proportional);
+	} else
+		XPLMDrawString(color, statusPos, b + ((h / 2) - (textHeight / 2)), (char*)"Off", nullptr, xplmFont_Proportional);
+}
 
 void CreateControllerWidget()
 {
 	int l, t, r, b;
 	XPLMGetScreenBoundsGlobal(&l, &t, &r, &b); // 0, 1080, 1920, 0
-	int x = l + 50, y = t - 250, w = 200, h = 100;
-	int x2 = w + x;
-	int y2 = y - h;
-	globals.controllerWidget = XPCreateWidget(x, y, x2, y2, 1, "AutoThrottle Controller", 1, nullptr, xpWidgetClass_MainWindow);
-	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowType, xpMainWindowStyle_MainWindow);
-	XPSetWidgetProperty(globals.controllerWidget, xpProperty_MainWindowHasCloseBoxes, 1);
-	auto lblText = XPCreateWidget(x + 10, y - 20, x + 50, y - 40, 1, "Speed: ", 0, globals.controllerWidget, xpWidgetClass_Caption);
-	std::string str = std::to_string(200.0f);
+	int x = l + 25, y = t - 100;
+	int w = 130, h = 50;
 
-	globals.lblHoldSpeed = XPCreateWidget(x + 55, y - 20, x2 - 25, y - 40, 1, str.c_str(), 0, globals.controllerWidget, xpWidgetClass_Caption);
+	XPLMCreateWindow_t wnd{ 0 };
+	wnd.structSize = sizeof(wnd);
+	wnd.left = x;
+	wnd.top = y;
+	wnd.right = x + w;
+	wnd.bottom = y - h;
+	wnd.drawWindowFunc = wndDrawFn;
+	wnd.handleCursorFunc = nullptr;
+	wnd.handleKeyFunc = nullptr;
+	wnd.handleMouseClickFunc = nullptr;
+	wnd.handleMouseWheelFunc = nullptr;
+	wnd.handleRightClickFunc = nullptr;
+	wnd.decorateAsFloatingWindow = xplm_WindowDecorationNone;
+	wnd.layer = xplm_WindowLayerFlightOverlay;
+	wnd.visible = false;
+	wnd.refcon = nullptr;
 
-	//auto wnd = XPGetWidgetUnderlyingWindow(globals.controllerWidget);
-	//XPLMSetWindowPositioningMode(wnd, xplm_WindowPositionFree, -1);
-	//XPLMSetWindowResizingLimits(wnd, 200, 200, 300, 300);
-	//XPLMSetWindowTitle(wnd, "Sample Window");
-
-	XPAddWidgetCallback(globals.controllerWidget, controllerWidgetCb);
-	XPShowWidget(globals.controllerWidget);
-	XPBringRootWidgetToFront(globals.controllerWidget);
+	globals.controllerWnd = XPLMCreateWindowEx(&wnd);
 }
-
 int controllerWidgetCb(XPWidgetMessage msg, XPWidgetID widget, intptr_t param1, intptr_t param2)
 {
 	if (msg == xpMessage_CloseButtonPushed)
