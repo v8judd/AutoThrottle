@@ -142,7 +142,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 			if (globals.log.is_open())
 			{
 				globals.log << "setpoint: " << globals.holdSpeed << std::endl;
-				globals.log << "t;error;speed;out;setpoint;Int" << std::endl;
+				globals.log << "t;error;speed;out;setpoint;Int;Diff" << std::endl;
 			}
 
 			lastTime = XPLMGetDataf(globals.timeRef);
@@ -183,7 +183,13 @@ XPLMCreateFlightLoop_t controllerLoop{
 				lastLogTime = t;
 				if (globals.log.is_open())
 				{
-					globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << globals.pid->data().integrator << std::endl;
+					globals.log << t << ";";
+					globals.log << err << ";";
+					globals.log << ias << ";";
+					globals.log << globals.pid->data().out << ";";
+					globals.log << globals.holdSpeed << ";";
+					globals.log << globals.pid->data().integrator << ";";
+					globals.log << globals.pid->data().differentiator << std::endl;
 				}
 			}
 			return globals.pidT;
