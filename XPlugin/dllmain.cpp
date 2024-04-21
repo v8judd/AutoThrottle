@@ -16,6 +16,18 @@
 
 #include "../PID.h"
 
+///
+/// ideas: 
+///  - disable AT and set idle when 100 ft above ground (AGL)
+///  - load different controller settings for dirfferent aircrafts
+///  - 
+
+
+/// <summary>
+/// 
+/// </summary>
+/// <param name="menuRef"></param>
+/// <param name="itemRef"></param>
 void AutoThrottleMenuHandler(void* menuRef, void* itemRef);
 float getAutoSpeed(void* ref);
 void setAutoSpeed(void* ref, float val);
@@ -63,18 +75,22 @@ struct globals_t
 	float limMax = 0;
 }globals;
 
-void loadControllerConfig(PIDController& ctrl)
+void loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 {
-	std::ifstream fs{ globals.pluginPath + "\\pid.ini" };
-	fs.seekg(0, std::ios::end);
-	int len = fs.tellg();
-	fs.seekg(0, std::ios::beg);
+	//std::ifstream fs{ globals.pluginPath + "\\pid.ini" };
+	std::ifstream fs{ globals.pluginPath + "\\" + fileName };
 	std::string str;
 	std::vector<std::string> lines;
 
 	while (!fs.eof())
 	{
 		fs >> str;
+		if (str.empty()) // filter empty lines
+			continue;
+
+		if (str.substr(0, 2) == "//" || str.substr(0, 1) == "#") // filter comments
+			continue;
+
 		lines.push_back(str);
 	}
 
@@ -126,7 +142,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 			if (globals.log.is_open())
 			{
 				globals.log << "setpoint: " << globals.holdSpeed << std::endl;
-				globals.log << "t;error;speed;out;setpoint" << std::endl;
+				globals.log << "t;error;speed;out;setpoint;Int" << std::endl;
 			}
 
 			lastTime = XPLMGetDataf(globals.timeRef);
@@ -167,7 +183,7 @@ XPLMCreateFlightLoop_t controllerLoop{
 				lastLogTime = t;
 				if (globals.log.is_open())
 				{
-					globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << std::endl;
+					globals.log << t << ";" << err << ";" << ias << ";" << globals.pid->data().out << ";" << globals.holdSpeed << globals.pid->data().integrator << std::endl;
 				}
 			}
 			return globals.pidT;
@@ -209,10 +225,6 @@ PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
 	std::string tmp{ filePath };
 	auto pos = tmp.find_last_of('\\');
 	globals.pluginPath = tmp.substr(0, pos);
-
-	PIDController ctrl{ 0 };
-	loadControllerConfig(ctrl);
-	globals.pid = new PID{ ctrl };
 
 	controllerLoop.refcon = nullptr;
 	controllerLoop.structSize = sizeof(controllerLoop);
@@ -259,8 +271,21 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 
 				// user aircraft loaded
 				XPLMGetNthAircraftModel(0, file, path);
-				globals.plane = file;
-				if (globals.plane.compare("Cessna_CitationX.acf") == 0)
+				std::string acFile{ file };
+				auto pos = acFile.find_last_of('.');
+				if (std::string::npos != pos)
+				{
+					acFile = acFile.substr(0, pos);
+				}
+
+				globals.plane = acFile;
+				PIDController ctrl{ 0 };
+				loadControllerConfig(acFile + ".ini", ctrl);
+				globals.pid = new PID{ ctrl };
+
+				if (globals.plane.compare("Cessna_CitationX") == 0)
+					XPLMScheduleFlightLoop(globals.fltLoopId, 0.02f, 0);
+				else if (globals.plane.compare("C90B") == 0)
 					XPLMScheduleFlightLoop(globals.fltLoopId, 0.02f, 0);
 				else
 					XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
@@ -286,6 +311,7 @@ void enableAutoThrottle()
 
 	auto& ctrl = globals.pid->data();
 
+	globals.log << "Airframe: " << globals.plane << std::endl;
 	globals.log << "Kp: " << ctrl.Kp << std::endl;
 	globals.log << "Ki: " << ctrl.Ki << std::endl;
 	globals.log << "Kd: " << ctrl.Kd << std::endl;
@@ -334,7 +360,7 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 		globals.autoThrEnabled = false;
 		// reload controller config from file
 		PIDController ctrl{ 0 };
-		loadControllerConfig(ctrl);
+		loadControllerConfig(globals.plane + ".ini", ctrl);
 		globals.pid->updateConfig(ctrl);
 	} else if ("config" == str)
 	{
