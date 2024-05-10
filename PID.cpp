@@ -38,20 +38,23 @@ float PID::update(float setpoint, float measurement)
 	/*
 	* Integral
 	*/
-	pid.integrator = pid.integrator + 0.5f * pid.Ki * pid.T * (error + pid.prevError);
-
-	/* Anti-wind-up via integrator clamping */
-	if (pid.integrator > pid.limMaxInt)
+	if (pid.Ki != 0)
 	{
+		pid.integrator = pid.integrator + 0.5f * pid.Ki * pid.T * (error + pid.prevError);
 
-		pid.integrator = pid.limMaxInt;
+		/* Anti-wind-up via integrator clamping */
+		if (pid.integrator > pid.limMaxInt)
+		{
+			pid.integrator = pid.limMaxInt;
 
-	} else if (pid.integrator < pid.limMinInt)
-	{
+		} else if (pid.integrator < pid.limMinInt)
+		{
+			pid.integrator = pid.limMinInt;
 
-		pid.integrator = pid.limMinInt;
+		}
+	} else
+		pid.integrator = 0;
 
-	}
 
 
 	/*

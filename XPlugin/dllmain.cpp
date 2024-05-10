@@ -116,6 +116,7 @@ void loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 	globals.pidT = cfg["pid_time"];
 	globals.limMax = cfg["limMax"];
 	globals.limMin = cfg["limMin"];
+	ctrl.T = globals.pidT;
 }
 
 XPLMCreateFlightLoop_t controllerLoop{
@@ -290,9 +291,9 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 				globals.pid = new PID{ ctrl };
 
 				if (globals.plane.compare("Cessna_CitationX") == 0)
-					XPLMScheduleFlightLoop(globals.fltLoopId, 0.02f, 0);
+					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
 				else if (globals.plane.compare("C90B") == 0)
-					XPLMScheduleFlightLoop(globals.fltLoopId, 0.02f, 0);
+					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
 				else
 					XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
 
