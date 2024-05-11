@@ -313,7 +313,7 @@ void enableAutoThrottle()
 		globals.log.close();
 	}
 
-	globals.log.open(globals.pluginPath + "\\log" + std::to_string(globals.logCnt) + ".csv");
+	globals.log.open(globals.pluginPath + "\\" + globals.plane + "_log" + std::to_string(globals.logCnt) + ".csv");
 	++globals.logCnt;
 
 	auto& ctrl = globals.pid->data();

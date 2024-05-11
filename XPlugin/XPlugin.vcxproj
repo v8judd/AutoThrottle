@@ -173,6 +173,10 @@ copy $(SolutionDir)C90B.ini $(OutDir)\C90B.ini /Y</Command>
       <AdditionalLibraryDirectories>C:\Users\iceri\source\repos\AutoThrottle\XPSDK\Libraries\Win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>XPLM_64.lib;XPWidgets_64.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(SolutionDir)Cessna_CitationX.ini $(OutDir)\Cessna_CitationX.ini /Y
+copy $(SolutionDir)C90B.ini $(OutDir)\C90B.ini /Y</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\PID.h" />
