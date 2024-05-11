@@ -56,6 +56,10 @@ struct globals_t
 	XPLMDataRef iasRef = nullptr;
 	XPLMDataRef apSpeedRef = nullptr; // Autopilot set speed
 	XPLMDataRef holdSpeedRef = nullptr;
+	XPLMDataRef ittRef = nullptr;
+	XPLMDataRef itt_maxGreenRef = nullptr;
+	XPLMDataRef trqRef = nullptr;
+	XPLMDataRef trq_maxGreenRef = nullptr;
 
 	XPWidgetID controllerWidget = nullptr;
 	XPWidgetID lblHoldSpeed = nullptr;
@@ -129,71 +133,128 @@ bool loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 	return true;
 }
 
+float controllerLoopFn(float timeSinceLastCall, float timeSinceLastLoop, int counter, void* ref)
+{
+	static float lastTime = 0;
+	static float t = 0;
+	static float lastLogTime = 0;
+	static float lastMaxLim = 0;
+
+	std::string lv = std::to_string(globals.holdSpeed);
+	XPSetWidgetDescriptor(globals.lblHoldSpeed, lv.c_str());
+
+	if (!globals.autoThrEnabled)
+	{
+		lastLogTime = 0;
+		lastTime = 0;
+		return globals.pidT;
+	}
+
+	if (0 == lastTime)
+	{
+		if (globals.log.is_open())
+		{
+			globals.log << "setpoint: " << globals.holdSpeed << std::endl;
+			globals.log << "t;error;speed;out;setpoint;Int;Diff" << std::endl;
+		}
+
+		lastTime = XPLMGetDataf(globals.timeRef);
+		t = 0;
+	}
+	auto deltaT = XPLMGetDataf(globals.timeRef) - lastTime;
+	if (deltaT <= 0.000001f)
+		return globals.pidT;
+
+	globals.pid->setTime(deltaT);
+	auto ias = XPLMGetDataf(globals.iasRef);
+
+	//globals.pid->setMaxLimit(globals.limMax);
+	globals.pid->setMinLimit(globals.limMin);
+
+	auto thr = XPLMGetDataf(globals.throttleRef);
+	float itt[2];
+	XPLMGetDatavf(globals.ittRef, itt, 0, 2);
+	float trq[2];
+	XPLMGetDatavf(globals.trqRef, trq, 0, 2);
+	trq[0] = trq[0] * 0.7376; // Nm to ft-lbs
+	trq[1] = trq[1] * 0.7376;
+	auto trq_maxGreen = XPLMGetDataf(globals.trq_maxGreenRef);
+	auto itt_maxGreen = XPLMGetDataf(globals.itt_maxGreenRef);
+
+	// the PID controller calculates what is needed,
+	// but after the aircraft specific filters will be applied
+	// (to keep engine limits in green range)
+	if (itt[0] > itt_maxGreen || itt[1] > itt_maxGreen)
+	{
+		lastMaxLim = thr * 0.99;
+		if (lastMaxLim < 0.5)
+			lastMaxLim = 0.5;
+		if (lastMaxLim > globals.limMax)
+			lastMaxLim = globals.limMax;
+		globals.pid->setMaxLimit(lastMaxLim);
+	}
+	if (itt[0] <= (itt_maxGreen * 0.95))
+	{
+		lastMaxLim *= 1.02;
+		if (lastMaxLim == 0)
+			globals.pid->setMaxLimit(globals.limMax);
+		else
+			globals.pid->setMaxLimit(lastMaxLim);
+	}
+
+	if (globals.plane == "C90B")
+	{		
+		if (trq[0] > trq_maxGreen || trq[1] > trq_maxGreen)
+		{
+			lastMaxLim = thr * 0.98;
+			if (lastMaxLim < 0.5)
+				lastMaxLim = 0.5;
+			if (lastMaxLim > globals.limMax)
+				lastMaxLim = globals.limMax;
+			globals.pid->setMaxLimit(lastMaxLim);
+		}
+		if (trq[0] < (trq_maxGreen * 0.95))
+		{
+			lastMaxLim = thr * 1.025;
+			if (lastMaxLim == 0)
+				globals.pid->setMaxLimit(globals.limMax);
+			else
+				globals.pid->setMaxLimit(lastMaxLim);
+		}
+	}
+	auto err = globals.pid->update(globals.holdSpeed, ias);
+
+	// aircraft specific filters for engines or other parameters
+	// (e.g. FMS speeds in the citationX
+
+	thr = globals.pid->data().out;
+	XPLMSetDataf(globals.throttleRef, thr);
+
+	lastTime = XPLMGetDataf(globals.timeRef);
+	t += deltaT;
+	if (0 == lastLogTime)
+		lastLogTime = t;
+	if (t - lastLogTime > 0.1f)
+	{
+		lastLogTime = t;
+		if (globals.log.is_open())
+		{
+			globals.log << t << ";";
+			globals.log << err << ";";
+			globals.log << ias << ";";
+			globals.log << globals.pid->data().out << ";";
+			globals.log << globals.holdSpeed << ";";
+			globals.log << globals.pid->data().integrator << ";";
+			globals.log << globals.pid->data().differentiator << std::endl;
+		}
+	}
+	return globals.pidT;
+}
+
 XPLMCreateFlightLoop_t controllerLoop{
 	sizeof(XPLMCreateFlightLoop_t),
 	xplm_FlightLoop_Phase_AfterFlightModel,
-	[](float timeSinceLastCall, float timeSinceLastLoop, int counter, void* ref)->float {
-
-		static float lastTime = 0;
-		static float t = 0;
-		static float lastLogTime = 0;
-
-		std::string lv = std::to_string(globals.holdSpeed);
-		XPSetWidgetDescriptor(globals.lblHoldSpeed, lv.c_str());
-
-		if (!globals.autoThrEnabled)
-		{
-			lastLogTime = 0;
-			lastTime = 0;
-			return globals.pidT;
-		}
-
-		if (0 == lastTime)
-		{
-			if (globals.log.is_open())
-			{
-				globals.log << "setpoint: " << globals.holdSpeed << std::endl;
-				globals.log << "t;error;speed;out;setpoint;Int;Diff" << std::endl;
-			}
-
-			lastTime = XPLMGetDataf(globals.timeRef);
-			t = 0;
-		}
-		auto deltaT = XPLMGetDataf(globals.timeRef) - lastTime;
-		if (deltaT <= 0.000001f)
-			return globals.pidT;
-
-		globals.pid->setTime(deltaT);
-		auto ias = XPLMGetDataf(globals.iasRef);
-
-		auto prevErr = globals.pid->data().prevError;
-		globals.pid->setMaxLimit(globals.limMax);
-		globals.pid->setMinLimit(globals.limMin);
-
-			auto err = globals.pid->update(globals.holdSpeed, ias);
-
-			XPLMSetDataf(globals.throttleRef, globals.pid->data().out);
-
-			lastTime = XPLMGetDataf(globals.timeRef);
-			t += deltaT;
-			if (0 == lastLogTime)
-				lastLogTime = t;
-			if (t - lastLogTime > 0.1f)
-			{
-				lastLogTime = t;
-				if (globals.log.is_open())
-				{
-					globals.log << t << ";";
-					globals.log << err << ";";
-					globals.log << ias << ";";
-					globals.log << globals.pid->data().out << ";";
-					globals.log << globals.holdSpeed << ";";
-					globals.log << globals.pid->data().integrator << ";";
-					globals.log << globals.pid->data().differentiator << std::endl;
-				}
-			}
-			return globals.pidT;
-		}
+	controllerLoopFn
 };
 
 PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
@@ -221,6 +282,10 @@ PLUGIN_API int XPluginStart(char* name, char* sig, char* desc)
 	globals.holdSpeedUpCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_up", "Hold speed up");
 	globals.holdSpeedDownCmd = XPLMCreateCommand("v8judd/auto_throttle/hold_speed_down", "Hold speed down");
 	globals.autoThrottleToggleCmd = XPLMCreateCommand("v8judd/auto_throttle/ATtoggle", "AutoThrottle toggle");
+	globals.ittRef = XPLMFindDataRef("sim/cockpit2/engine/indicators/ITT_deg_C");
+	globals.itt_maxGreenRef = XPLMFindDataRef("sim/aircraft/limits/green_hi_ITT");
+	globals.trqRef = XPLMFindDataRef("sim/flightmodel/engine/ENGN_TRQ");
+	globals.trq_maxGreenRef = XPLMFindDataRef("sim/aircraft/limits/green_hi_TRQ");
 
 	XPLMRegisterCommandHandler(globals.holdSpeedUpCmd, holdSpeedUpHandler, 1, nullptr);
 	XPLMRegisterCommandHandler(globals.holdSpeedDownCmd, holdSpeedDownHandler, 1, nullptr);
