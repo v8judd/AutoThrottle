@@ -77,6 +77,8 @@ struct globals_t
 	float pidT = 0;
 	float limMin = 0;
 	float limMax = 0;
+	float speedMax = 0;
+	float speedMin = 0;
 }globals;
 
 bool loadControllerConfig(const std::string& fileName, PIDController& ctrl)
@@ -129,6 +131,8 @@ bool loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 	globals.limMax = cfg["limMax"];
 	globals.limMin = cfg["limMin"];
 	ctrl.T = globals.pidT;
+	globals.speedMax = cfg["speedMax"];
+	globals.speedMin = cfg["speedMin"];
 
 	return true;
 }
@@ -203,7 +207,7 @@ float controllerLoopFn(float timeSinceLastCall, float timeSinceLastLoop, int cou
 	}
 
 	if (globals.plane == "C90B")
-	{		
+	{
 		if (trq[0] > trq_maxGreen || trq[1] > trq_maxGreen)
 		{
 			lastMaxLim = thr * 0.98;
@@ -471,13 +475,13 @@ int holdSpeedUpHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 
 	if (phase == xplm_CommandBegin)
 	{
-		if (globals.holdSpeed <= 320)
+		if (globals.holdSpeed <= globals.speedMax)
 			globals.holdSpeed++;
 
 		startTime = XPLMGetElapsedTime();
 	} else if (phase == xplm_CommandContinue && XPLMGetElapsedTime() - startTime > 0.5)
 	{
-		if (globals.holdSpeed <= 320)
+		if (globals.holdSpeed <= globals.speedMax)
 			globals.holdSpeed++;
 	}
 	return 0;
@@ -489,13 +493,13 @@ int holdSpeedDownHandler(XPLMCommandRef cmd, XPLMCommandPhase phase, void* ref)
 
 	if (phase == xplm_CommandBegin)
 	{
-		if (globals.holdSpeed >= 120)
+		if (globals.holdSpeed >= globals.speedMin)
 			globals.holdSpeed--;
 
 		startTime = XPLMGetElapsedTime();
 	} else if (phase == xplm_CommandContinue && XPLMGetElapsedTime() - startTime > 0.5)
 	{
-		if (globals.holdSpeed >= 120)
+		if (globals.holdSpeed >= globals.speedMin)
 			globals.holdSpeed--;
 	}
 	return 0;
