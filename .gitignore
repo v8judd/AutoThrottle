@@ -4,3 +4,4 @@ obj
 x64
 *.filters
 *.user
+/_deploy
