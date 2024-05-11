@@ -167,19 +167,8 @@ XPLMCreateFlightLoop_t controllerLoop{
 		auto ias = XPLMGetDataf(globals.iasRef);
 
 		auto prevErr = globals.pid->data().prevError;
-		//if (prevErr > 15)
-		//	globals.pid->setMaxLimit(0.95f);
-		//else if (prevErr < 5)
-		//	globals.pid->setMaxLimit(0.625);
-		//else
-			globals.pid->setMaxLimit(globals.limMax);
-
-			//if (prevErr < 15)
-			//	globals.pid->setMinLimit(0);
-			//else if (prevErr > -5)
-			//	globals.pid->setMinLimit(0.375);
-			//else
-				globals.pid->setMinLimit(globals.limMin);
+		globals.pid->setMaxLimit(globals.limMax);
+		globals.pid->setMinLimit(globals.limMin);
 
 			auto err = globals.pid->update(globals.holdSpeed, ias);
 
@@ -309,8 +298,6 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
 				else if (globals.plane.compare("C90B") == 0)
 					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
-				//else
-					//XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
 
 			}
 			break;
