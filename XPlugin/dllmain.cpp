@@ -13,15 +13,15 @@
 #include <vector>
 #include <fstream>
 #include <map>
+#include <sstream>
 
 #include "../PID.h"
 
 ///
 /// ideas: 
 ///  - disable AT and set idle when 100 ft above ground (AGL)
-///  - load different controller settings for dirfferent aircrafts
-///  - 
-
+///  - minimum setable speeds per aircraft
+///	 - take into account ITT / max Torque when setting max output value
 
 /// <summary>
 /// 
@@ -47,7 +47,7 @@ int autoThrottleMenuIdx;
 
 struct globals_t
 {
-	PID* pid = nullptr;
+	std::unique_ptr<PID> pid = nullptr;
 	std::string pluginPath{ "" };
 	std::string plane = { "" };
 
@@ -75,14 +75,20 @@ struct globals_t
 	float limMax = 0;
 }globals;
 
-void loadControllerConfig(const std::string& fileName, PIDController& ctrl)
+bool loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 {
 	std::ifstream fs{ globals.pluginPath + "\\" + fileName };
 	std::string str;
 	std::vector<std::string> lines;
 
 	if (!fs.is_open())
-		return;
+	{
+		std::ostringstream ss;
+		ss << "[TK] failed to load config for aircraft: " << globals.plane << std::endl;
+		ss << "does the file " << fileName << " exist?" << std::endl;
+		XPLMDebugString(ss.str().c_str());
+		return false;
+	}
 
 	while (!fs.eof())
 	{
@@ -119,6 +125,8 @@ void loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 	globals.limMax = cfg["limMax"];
 	globals.limMin = cfg["limMin"];
 	ctrl.T = globals.pidT;
+
+	return true;
 }
 
 XPLMCreateFlightLoop_t controllerLoop{
@@ -252,7 +260,7 @@ PLUGIN_API void XPluginStop()
 	}
 	XPLMDestroyMenu(autoThrottleMenuID);
 
-	delete globals.pid;
+	//delete globals.pid;
 }
 
 PLUGIN_API int XPluginEnable()
@@ -289,8 +297,13 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 
 				globals.plane = acFile;
 				PIDController ctrl{ 0 };
-				loadControllerConfig(acFile + ".ini", ctrl);
-				globals.pid = new PID{ ctrl };
+
+				// if controller config fails to load -> abort
+				if (!loadControllerConfig(acFile + ".ini", ctrl))
+					break;
+
+				// re-initialize new pointer to PID 
+				globals.pid.reset(new PID{ ctrl });
 
 				if (globals.plane.compare("Cessna_CitationX") == 0)
 					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
@@ -356,14 +369,10 @@ void AutoThrottleMenuHandler(void* menuRef, void* itemRef)
 	std::string str{ reinterpret_cast<char*>(itemRef) };
 	if ("enable" == str)
 	{
-		// enable controller
-		//globals.autoThrEnabled = true;
 		enableAutoThrottle();
 
 	} else if ("disable" == str)
 	{
-		// disable controller
-		//globals.autoThrEnabled = false;
 		disableAutoThrottle();
 
 	} else if ("reload" == str)
