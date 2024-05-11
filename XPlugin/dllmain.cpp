@@ -77,10 +77,12 @@ struct globals_t
 
 void loadControllerConfig(const std::string& fileName, PIDController& ctrl)
 {
-	//std::ifstream fs{ globals.pluginPath + "\\pid.ini" };
 	std::ifstream fs{ globals.pluginPath + "\\" + fileName };
 	std::string str;
 	std::vector<std::string> lines;
+
+	if (!fs.is_open())
+		return;
 
 	while (!fs.eof())
 	{
@@ -294,13 +296,15 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void* param)
 					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
 				else if (globals.plane.compare("C90B") == 0)
 					XPLMScheduleFlightLoop(globals.fltLoopId, globals.pidT, 0);
-				else
-					XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
+				//else
+					//XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
 
 			}
 			break;
-			//case XPLM_MSG_PLANE_UNLOADED:
-			//	break;
+
+		case XPLM_MSG_PLANE_UNLOADED:
+			XPLMScheduleFlightLoop(globals.fltLoopId, 0, 0);
+			break;
 	}
 }
 
